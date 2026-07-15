@@ -963,36 +963,54 @@ with right:
 
 # ── Pipeline wiring ──────────────────────────────────────────────────────────
 
+# ── Pipeline wiring ──────────────────────────────────────────────────────────
+
+# ── Pipeline wiring ──────────────────────────────────────────
+
 def _run_step(step_idx: int, topic: str, results: dict):
-    from pipeline import build_reader_agent, build_search_agent, writer_chain, critic_chain
+    from tools import web_search, scrape_url
+    from pipeline import writer_chain, critic_chain
+    import re
 
+    # ✅ STEP 1 — SEARCH
     if step_idx == 0:
-        agent = build_search_agent()
-        out = agent.invoke({"messages": [("user", f"Find recent, reliable and detailed information about: {topic}")]})
-        return out["messages"][-1].content
+        return web_search.invoke({"query": topic})
 
+    # ✅ STEP 2 — READER (Extract first URL & scrape)
     elif step_idx == 1:
-        agent = build_reader_agent()
-        out = agent.invoke({"messages": [("user",
-            f"Based on the following search results about '{topic}', "
-            f"pick the most relevant URL and scrape it for deeper content.\n\n"
-            f"Search Results:\n{results['search'][:800]}")]})
-        return out["messages"][-1].content
+        search_text = results.get("search", "")
+        urls = re.findall(r'https?://\S+', search_text)
 
+        if urls:
+            best_url = urls[0]
+            return scrape_url.invoke({"url": best_url})
+        else:
+            return "No valid URL found in search results."
+
+    # ✅ STEP 3 — WRITER (Gemini)
     elif step_idx == 2:
         combined = (
-            f"SEARCH RESULTS:\n{results['search']}\n\n"
-            f"DETAILED SCRAPED CONTENT:\n{results['reader']}"
+            f"SEARCH RESULTS:\n{results.get('search', '')}\n\n"
+            f"DETAILED SCRAPED CONTENT:\n{results.get('reader', '')}"
         )
-        return writer_chain.invoke({"topic": topic, "research": combined})
 
+        return writer_chain.invoke({
+            "topic": topic,
+            "research": combined
+        })
+
+    # ✅ STEP 4 — CRITIC (Gemini)
     elif step_idx == 3:
-        return critic_chain.invoke({"report": results["report"]})
+        return critic_chain.invoke({
+            "report": results.get("report", "")
+        })
 
 
 STEP_KEYS  = ["search", "reader", "report", "feedback"]
 STEP_NAMES = ["Search Agent", "Reader Agent", "Writer Agent", "Critic Agent"]
 
+
+# ✅ START PIPELINE WHEN BUTTON CLICKED
 if run_btn and topic_input.strip():
     reset()
     st.session_state.running = True
@@ -1001,6 +1019,8 @@ if run_btn and topic_input.strip():
     add_log(f"Pipeline started → '{topic_input.strip()}'")
     st.rerun()
 
+
+# ✅ EXECUTE PIPELINE STEP-BY-STEP
 if st.session_state.running:
     i = st.session_state.current_step
     topic_locked = st.session_state.topic_locked
@@ -1012,7 +1032,9 @@ if st.session_state.running:
         if key not in st.session_state.results:
             try:
                 add_log(f"{name} started…")
+
                 result = _run_step(i, topic_locked, st.session_state.results)
+
                 st.session_state.results[key] = result
                 add_log(f"{name} done ✓")
 
