@@ -1,8 +1,10 @@
-streamlit==1.57.0
-python-docx==0.8.11
-reportlab==4.0.0
+streamlit==1.36.0
+python-docx
+fpdf2
+markdownify
 langchain
 langgraph
+langchain-google-genai
 beautifulsoup4
 requests
 python-dotenv

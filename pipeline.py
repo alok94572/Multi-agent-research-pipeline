@@ -3,45 +3,53 @@ from agents import writer_chain, critic_chain
 import re
 
 def run_research_pipeline(topic: str):
-
+    """
+    Executes the research pipeline and yields progress updates to allow streaming UI.
+    """
     state = {}
 
-    print("Step 1 — Searching...")
-    search_results = web_search.invoke({"query": topic})
-    state["search_results"] = search_results
+    yield {"step": 0, "status": "Searching the web...", "state": state}
+    try:
+        search_results = web_search.invoke({"query": topic})
+        state["search"] = search_results
+    except Exception as e:
+        state["search"] = f"Search failed: {e}"
 
-    print("Step 2 — Extracting URL...")
-    urls = re.findall(r'https?://\S+', search_results)
-
+    yield {"step": 1, "status": "Reading and scraping content...", "state": state}
+    urls = re.findall(r'https?://[^\s)\]]+', state.get("search", ""))
+    
     if urls:
         best_url = urls[0]
-        scraped_content = scrape_url.invoke({"url": best_url})
+        try:
+            scraped_content = scrape_url.invoke({"url": best_url})
+        except Exception as e:
+            scraped_content = f"Scraping failed: {e}"
     else:
-        scraped_content = "No valid URL found."
+        scraped_content = "No valid URL found in search results."
 
-    state["scraped_content"] = scraped_content
+    state["reader"] = scraped_content
 
-    print("Step 3 — Writing report...")
-    research_combined = f"""
-SEARCH RESULTS:
-{search_results}
-
-SCRAPED CONTENT:
-{scraped_content}
-"""
-
-    report = writer_chain.invoke({
-        "topic": topic,
-        "research": research_combined
-    })
+    yield {"step": 2, "status": "Writing research report...", "state": state}
+    research_combined = f"SEARCH RESULTS:\n{state.get('search', '')}\n\nSCRAPED CONTENT:\n{state.get('reader', '')}"
+    
+    try:
+        report = writer_chain.invoke({
+            "topic": topic,
+            "research": research_combined
+        })
+    except Exception as e:
+        report = f"Writing failed: {e}"
 
     state["report"] = report
 
-    print("Step 4 — Critic reviewing...")
-    feedback = critic_chain.invoke({
-        "report": report
-    })
+    yield {"step": 3, "status": "Critic reviewing report...", "state": state}
+    try:
+        feedback = critic_chain.invoke({
+            "report": report
+        })
+    except Exception as e:
+        feedback = f"Review failed: {e}"
 
     state["feedback"] = feedback
-
-    return state
+    
+    yield {"step": 4, "status": "Pipeline complete!", "state": state}

@@ -1,6 +1,5 @@
 from langchain.tools import tool
 from tavily import TavilyClient
-from newspaper import Article
 from bs4 import BeautifulSoup
 import requests
 import os
@@ -46,99 +45,63 @@ def web_search(query: str) -> str:
 @tool
 def scrape_url(url: str) -> str:
     """
-    Robust scraper with:
-    - Wikipedia handling
-    - Junk removal
-    - Sentence-safe truncation
-    - Crash protection
+    Robust, fast scraper that reads text from a URL using requests and BeautifulSoup.
+    Truncates content safely to prevent LLM context overflow.
     """
-
+    import requests
+    from bs4 import BeautifulSoup
+    import re
+    
+    MAX_CHARS = 10000
+    
     try:
-        from newspaper import Article
-        from bs4 import BeautifulSoup
-        import requests
-        import re
-
-        MAX_CHARS = 8000
-
-        # ✅ Wikipedia handling
-        if "wikipedia.org" in url:
-            response = requests.get(
-                url,
-                timeout=10,
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            content_div = soup.find("div", {"id": "mw-content-text"})
-
-            if content_div:
-                paragraphs = content_div.find_all("p")
-            else:
-                paragraphs = soup.find_all("p")
-
-            raw_text = "\n".join(
+        response = requests.get(
+            url,
+            timeout=8,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            }
+        )
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            script.decompose()
+            
+        # Target the main article or fallback to body/all p tags
+        main_content = soup.find("article") or soup.find("main") or soup.find("div", {"id": "content"}) or soup.body
+        
+        if not main_content:
+            return "Could not extract readable content from this page."
+            
+        paragraphs = main_content.find_all("p")
+        
+        if not paragraphs:
+            # Fallback to general text extraction
+            text = main_content.get_text(separator="\n")
+        else:
+            text = "\n".join(
                 p.get_text(strip=True)
                 for p in paragraphs
-                if len(p.get_text(strip=True)) > 80
+                if len(p.get_text(strip=True)) > 40
             )
-
-        else:
-            # ✅ Normal websites
-            article = Article(url)
-            article.download()
-            article.parse()
-
-            raw_text = article.text
-
-            if not raw_text:
-                return "No readable article content found."
-
-        # ✅ Remove common junk phrases
-        junk_phrases = [
-            "Read More",
-            "Continue reading",
-            "Advertisement",
-            "Subscribe",
-            "Sign up",
-            "Back to top"
-        ]
-
-        for phrase in junk_phrases:
-            raw_text = raw_text.replace(phrase, "")
-
-        # ✅ Remove breadcrumb-style patterns (Adventure / Arctic)
-        raw_text = re.sub(r"\w+\s*/\s*\w+", "", raw_text)
-
-        # ✅ Remove very short junk lines
-        lines = raw_text.split("\n")
-        cleaned_lines = [
-            line.strip()
-            for line in lines
-            if len(line.strip()) > 40
-        ]
-
-        cleaned_text = "\n".join(cleaned_lines)
-
-        # ✅ ✅ ✅ Sentence-safe truncation
-        sentences = re.split(r'(?<=[.!?])\s+', cleaned_text)
-
-        final_text = ""
-        current_length = 0
-
-        for sentence in sentences:
-            sentence = sentence.strip()
-
-            if not sentence:
-                continue
-
-            if current_length + len(sentence) > MAX_CHARS:
-                break
-
-            final_text += sentence + " "
-            current_length += len(sentence)
-
-        return final_text.strip()
-
+            
+        # Clean up the text
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        text = '\n'.join(chunk for chunk in chunks if chunk)
+        
+        # Truncate to MAX_CHARS
+        if len(text) > MAX_CHARS:
+            text = text[:MAX_CHARS] + "... [Content truncated for length]"
+            
+        return text.strip()
+        
+    except requests.Timeout:
+        return "Scraping failed: Request timed out."
+    except requests.RequestException as e:
+        return f"Scraping failed: Request error - {str(e)}"
     except Exception as e:
         return f"Scraping failed safely: {str(e)}"

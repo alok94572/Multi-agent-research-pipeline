@@ -1,3 +1,4 @@
+# pyrefly: ignore [missing-import]
 import streamlit as st
 import time
 import io
@@ -741,24 +742,27 @@ st.markdown("""
 left, right = st.columns([1, 1.7], gap="large")
 
 with left:
-    topic_input = st.text_input(
-        "Topic",
-        placeholder="e.g. CRISPR gene editing, quantum computing, climate policy…",
-        disabled=st.session_state.running,
-        label_visibility="collapsed",
-    )
-
-    col_run, col_reset = st.columns([4, 1])
-    with col_run:
-        run_btn = st.button(
-            "▶  Run Pipeline" if not st.session_state.running else "⏳  Pipeline running…",
-            disabled=st.session_state.running or not topic_input.strip(),
-            use_container_width=True,
+    with st.form(key="search_form"):
+        topic_input = st.text_input(
+            "Topic",
+            placeholder="e.g. CRISPR gene editing, quantum computing, climate policy…",
+            disabled=st.session_state.running,
+            label_visibility="collapsed",
         )
-    with col_reset:
-        if st.button("↺", help="Reset everything", use_container_width=True):
-            reset()
-            st.rerun()
+
+        col_run, col_reset = st.columns([4, 1])
+        with col_run:
+            run_btn = st.form_submit_button(
+                "▶  Run Pipeline" if not st.session_state.running else "⏳  Pipeline running…",
+                disabled=st.session_state.running,
+                use_container_width=True,
+            )
+        with col_reset:
+            reset_btn = st.form_submit_button("↺", help="Reset everything", use_container_width=True)
+            
+    if reset_btn:
+        reset()
+        st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("""
@@ -768,37 +772,72 @@ with left:
     </div>
     """, unsafe_allow_html=True)
 
-    step = st.session_state.current_step
-    idle = not st.session_state.running and not st.session_state.done
+    cards_placeholder = st.empty()
+    progress_placeholder = st.empty()
+    
+    def render_agent_cards(step, is_running, is_done):
+        html = ""
+        idle = not is_running and not is_done
+        for i, agent in enumerate(AGENTS):
+            if idle:
+                state = "idle"
+            elif is_done or i < step:
+                state = "done"
+            elif i == step:
+                state = "active"
+            else:
+                state = "waiting"
+            html += agent_card_html(agent, state)
+        return html
+        
+    cards_placeholder.markdown(render_agent_cards(st.session_state.current_step, st.session_state.running, st.session_state.done), unsafe_allow_html=True)
 
-    for i, agent in enumerate(AGENTS):
-        if idle:
-            state = "idle"
-        elif st.session_state.done or i < step:
-            state = "done"
-        elif i == step:
-            state = "active"
-        else:
-            state = "waiting"
-        st.markdown(agent_card_html(agent, state), unsafe_allow_html=True)
-
-    if st.session_state.running or st.session_state.done:
+    def render_progress(step, is_running, is_done):
         total = len(AGENTS)
-        done_count = step if st.session_state.running else total
-        label = "✅ Complete!" if st.session_state.done else f"Step {done_count + 1} of {total}"
-        st.progress(min(done_count / total, 1.0), text=label)
+        done_count = step if is_running else total
+        label = "✅ Complete!" if is_done else f"Step {done_count + 1} of {total}"
+        if is_running or is_done:
+            progress_placeholder.progress(min(done_count / total, 1.0), text=label)
+        else:
+            progress_placeholder.empty()
+            
+    render_progress(st.session_state.current_step, st.session_state.running, st.session_state.done)
 
+    logs_placeholder = st.empty()
+    def render_logs(logs):
+        if logs:
+            logs_html = "<br><div style=\"font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-family:'Inter',sans-serif\">🗒️ &nbsp;Activity Log</div>"
+            logs_placeholder.markdown(logs_html, unsafe_allow_html=True)
+            st.code("\n".join(logs[-25:]), language=None)
+        else:
+            logs_placeholder.empty()
+            
+    # Initial render of logs
     if st.session_state.logs:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("""
-        <div style="font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;
-          letter-spacing:1px;margin-bottom:8px;font-family:'Inter',sans-serif">
-          🗒️ &nbsp;Activity Log
-        </div>
-        """, unsafe_allow_html=True)
-        st.code("\n".join(st.session_state.logs[-25:]), language=None)
+        st.markdown("<br><div style=\"font-size:13px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-family:'Inter',sans-serif\">🗒️ &nbsp;Activity Log</div>", unsafe_allow_html=True)
+        logs_container = st.empty()
+        logs_container.code("\n".join(st.session_state.logs[-25:]), language=None)
+    else:
+        logs_container = st.empty()
 
 with right:
+    def loading_skeleton(text):
+        return f"""
+        <div style="padding:40px 20px;text-align:center;animation:pulse 1.5s infinite">
+          <div style="font-size:40px;margin-bottom:15px">⏳</div>
+          <div style="color:#94a3b8;font-family:'Inter',sans-serif;font-weight:600;font-size:15px">
+            {text}
+          </div>
+          <style>
+            @keyframes pulse {{
+              0% {{ opacity: 0.6; transform: scale(0.98); }}
+              50% {{ opacity: 1; transform: scale(1); }}
+              100% {{ opacity: 0.6; transform: scale(0.98); }}
+            }}
+          </style>
+        </div>
+        """
+
     if not st.session_state.done and not st.session_state.running:
         st.markdown("""
         <div style="text-align:center;padding:90px 30px;background:#0d1117;
@@ -818,197 +857,96 @@ with right:
         st.error(f"Pipeline error: {st.session_state.error}")
 
     else:
-        r = st.session_state.results
-        locked_topic = st.session_state.topic_locked
-
         tab_s, tab_r, tab_w, tab_c, tab_dl = st.tabs([
             "🔍 Search", "📖 Reader", "✍️ Report", "🧐 Critic", "⬇ Download"
         ])
 
         with tab_s:
-            if "search" in r:
-                st.markdown("""
-                <div class="tab-section-heading">
-                  <span class="accent-line"></span>Search Results
-                </div>""", unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;"
-                    f"padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;"
-                    f"font-family:\"Inter\",sans-serif;line-height:1.7'>{r['search']}</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.info("Search agent hasn't run yet.")
-
+            tab_s_content = st.empty()
         with tab_r:
-            if "reader" in r:
-                st.markdown("""
-                <div class="tab-section-heading">
-                  <span class="accent-line"></span>Scraped Content
-                </div>""", unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;"
-                    f"padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;"
-                    f"font-family:\"Inter\",sans-serif;line-height:1.7'>{r['reader']}</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.info("Reader agent hasn't run yet.")
-
+            tab_r_content = st.empty()
         with tab_w:
-            if "report" in r:
-                st.markdown("""
-                <div class="tab-section-heading">
-                  <span class="accent-line"></span>Final Report
-                </div>""", unsafe_allow_html=True)
-                c1, c2 = st.columns(2)
-                c1.metric("Words", f"{len(r['report'].split()):,}")
-                c2.metric("Topic", locked_topic[:28] + "…" if len(locked_topic) > 28 else locked_topic)
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown(r["report"])
-            else:
-                st.info("Writer agent hasn't run yet.")
-
+            tab_w_content = st.empty()
         with tab_c:
-            if "feedback" in r:
-                st.markdown("""
-                <div class="tab-section-heading">
-                  <span class="accent-line"></span>Critic Feedback
-                </div>""", unsafe_allow_html=True)
-                st.markdown(
-                    f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;"
-                    f"padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;"
-                    f"font-family:\"Inter\",sans-serif;line-height:1.7'>{r['feedback']}</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.info("Critic agent hasn't run yet.")
-
+            tab_c_content = st.empty()
         with tab_dl:
-            if "report" in r and "feedback" in r:
-                st.markdown("""
-                <div class="tab-section-heading">
-                  <span class="accent-line"></span>Download Report
-                </div>""", unsafe_allow_html=True)
-                st.markdown(
-                    "<p style='color:#64748b;font-size:14px;font-family:\"Inter\",sans-serif;"
-                    "margin-top:-8px;margin-bottom:20px'>"
-                    "Choose a format to download the full report including critic feedback.</p>",
-                    unsafe_allow_html=True,
-                )
+            tab_dl_content = st.empty()
 
-                fname_base = locked_topic.replace(" ", "_")[:40]
-                col_pdf, col_docx, col_txt = st.columns(3)
+        def update_tabs(step_idx, r, locked_topic):
+            with tab_s_content.container():
+                if "search" in r:
+                    st.markdown("""<div class="tab-section-heading"><span class="accent-line"></span>Search Results</div>""", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;font-family:\"Inter\",sans-serif;line-height:1.7'>{r['search']}</div>", unsafe_allow_html=True)
+                elif step_idx == 0:
+                    st.markdown(loading_skeleton("Searching the web for the most relevant sources..."), unsafe_allow_html=True)
+                else:
+                    st.info("Search agent hasn't run yet.")
 
-                with col_pdf:
-                    st.markdown(
-                        "<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;"
-                        "font-size:15px;margin-bottom:4px'>📄 PDF</div>"
-                        "<div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;"
-                        "margin-bottom:10px'>Styled, print-ready</div>",
-                        unsafe_allow_html=True
-                    )
-                    try:
-                        pdf_bytes = generate_pdf(locked_topic, r["report"], r["feedback"])
-                        st.download_button("Download PDF", data=pdf_bytes,
-                            file_name=f"{fname_base}_report.pdf",
-                            mime="application/pdf", use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"Error generating PDF: {e}")
+            with tab_r_content.container():
+                if "reader" in r:
+                    st.markdown("""<div class="tab-section-heading"><span class="accent-line"></span>Scraped Content</div>""", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;font-family:\"Inter\",sans-serif;line-height:1.7'>{r['reader']}</div>", unsafe_allow_html=True)
+                elif step_idx == 1:
+                    st.markdown(loading_skeleton("Scraping and analyzing website content..."), unsafe_allow_html=True)
+                else:
+                    st.info("Reader agent hasn't run yet.")
 
-                with col_docx:
-                    st.markdown(
-                        "<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;"
-                        "font-size:15px;margin-bottom:4px'>📝 DOCX</div>"
-                        "<div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;"
-                        "margin-bottom:10px'>Editable Word doc</div>",
-                        unsafe_allow_html=True
-                    )
-                    try:
-                        docx_bytes = generate_docx(locked_topic, r["report"], r["feedback"])
-                        st.download_button("Download DOCX", data=docx_bytes,
-                            file_name=f"{fname_base}_report.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"Error generating DOCX: {e}")
+            with tab_w_content.container():
+                if "report" in r:
+                    st.markdown("""<div class="tab-section-heading"><span class="accent-line"></span>Final Report</div>""", unsafe_allow_html=True)
+                    c1, c2 = st.columns(2)
+                    c1.metric("Words", f"{len(r['report'].split()):,}")
+                    c2.metric("Topic", locked_topic[:28] + "…" if len(locked_topic) > 28 else locked_topic)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown(r["report"])
+                elif step_idx == 2:
+                    st.markdown(loading_skeleton("Drafting a comprehensive research report..."), unsafe_allow_html=True)
+                else:
+                    st.info("Writer agent hasn't run yet.")
 
-                with col_txt:
-                    st.markdown(
-                        "<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;"
-                        "font-size:15px;margin-bottom:4px'>🗒️ TXT</div>"
-                        "<div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;"
-                        "margin-bottom:10px'>Plain text, always works</div>",
-                        unsafe_allow_html=True
-                    )
-                    txt_bytes = generate_txt(locked_topic, r["report"], r["feedback"])
-                    st.download_button("Download TXT", data=txt_bytes,
-                        file_name=f"{fname_base}_report.txt",
-                        mime="text/plain", use_container_width=True)
+            with tab_c_content.container():
+                if "feedback" in r:
+                    st.markdown("""<div class="tab-section-heading"><span class="accent-line"></span>Critic Feedback</div>""", unsafe_allow_html=True)
+                    st.markdown(f"<div style='background:#0d1117;border:1px solid #1e293b;border-radius:12px;padding:20px;font-size:14px;color:#cbd5e1;white-space:pre-wrap;font-family:\"Inter\",sans-serif;line-height:1.7'>{r['feedback']}</div>", unsafe_allow_html=True)
+                elif step_idx == 3:
+                    st.markdown(loading_skeleton("Critiquing and reviewing the report..."), unsafe_allow_html=True)
+                else:
+                    st.info("Critic agent hasn't run yet.")
 
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.info("Note: PDF/DOCX require `fpdf2` and `python-docx`. (Ignore if already installed)")
-            else:
-                st.markdown("""
-                <div style="text-align:center;padding:50px 20px;background:#0d1117;
-                  border:1.5px dashed #1e293b;border-radius:12px">
-                  <div style="font-size:36px">⏳</div>
-                  <div style="color:#475569;margin-top:12px;font-family:'Inter',sans-serif;
-                    font-size:15px;font-weight:500">
-                    Downloads available once the pipeline completes.
-                  </div>
-                </div>
-                """, unsafe_allow_html=True)
+            with tab_dl_content.container():
+                if "report" in r and "feedback" in r:
+                    st.markdown("""<div class="tab-section-heading"><span class="accent-line"></span>Download Report</div>""", unsafe_allow_html=True)
+                    st.markdown("<p style='color:#64748b;font-size:14px;font-family:\"Inter\",sans-serif;margin-top:-8px;margin-bottom:20px'>Choose a format to download the full report including critic feedback.</p>", unsafe_allow_html=True)
+                    fname_base = locked_topic.replace(" ", "_")[:40]
+                    col_pdf, col_docx, col_txt = st.columns(3)
+                    with col_pdf:
+                        st.markdown("<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;font-size:15px;margin-bottom:4px'>📄 PDF</div><div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;margin-bottom:10px'>Styled, print-ready</div>", unsafe_allow_html=True)
+                        try:
+                            st.download_button("Download PDF", data=generate_pdf(locked_topic, r["report"], r["feedback"]), file_name=f"{fname_base}_report.pdf", mime="application/pdf", use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Error generating PDF: {e}")
+                    with col_docx:
+                        st.markdown("<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;font-size:15px;margin-bottom:4px'>📝 DOCX</div><div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;margin-bottom:10px'>Editable Word doc</div>", unsafe_allow_html=True)
+                        try:
+                            st.download_button("Download DOCX", data=generate_docx(locked_topic, r["report"], r["feedback"]), file_name=f"{fname_base}_report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Error generating DOCX: {e}")
+                    with col_txt:
+                        st.markdown("<div style='font-weight:700;color:#f1f5f9;font-family:\"Inter\",sans-serif;font-size:15px;margin-bottom:4px'>🗒️ TXT</div><div style='font-size:12px;color:#475569;font-family:\"Inter\",sans-serif;margin-bottom:10px'>Plain text, always works</div>", unsafe_allow_html=True)
+                        st.download_button("Download TXT", data=generate_txt(locked_topic, r["report"], r["feedback"]), file_name=f"{fname_base}_report.txt", mime="text/plain", use_container_width=True)
+                else:
+                    st.markdown("""<div style="text-align:center;padding:50px 20px;background:#0d1117;border:1.5px dashed #1e293b;border-radius:12px"><div style="font-size:36px">⏳</div><div style="color:#475569;margin-top:12px;font-family:'Inter',sans-serif;font-size:15px;font-weight:500">Downloads available once the pipeline completes.</div></div>""", unsafe_allow_html=True)
+
+        # Initial render of tabs based on current state
+        if not st.session_state.running:
+            update_tabs(-1, st.session_state.results, st.session_state.topic_locked)
 
 
 # ── Pipeline wiring ──────────────────────────────────────────────────────────
-
-# ── Pipeline wiring ──────────────────────────────────────────────────────────
-
-# ── Pipeline wiring ──────────────────────────────────────────
-
-def _run_step(step_idx: int, topic: str, results: dict):
-    from tools import web_search, scrape_url
-    from pipeline import writer_chain, critic_chain
-    import re
-
-    # ✅ STEP 1 — SEARCH
-    if step_idx == 0:
-        return web_search.invoke({"query": topic})
-
-    # ✅ STEP 2 — READER (Extract first URL & scrape)
-    elif step_idx == 1:
-        search_text = results.get("search", "")
-        urls = re.findall(r'https?://\S+', search_text)
-
-        if urls:
-            best_url = urls[0]
-            return scrape_url.invoke({"url": best_url})
-        else:
-            return "No valid URL found in search results."
-
-    # ✅ STEP 3 — WRITER (Gemini)
-    elif step_idx == 2:
-        combined = (
-            f"SEARCH RESULTS:\n{results.get('search', '')}\n\n"
-            f"DETAILED SCRAPED CONTENT:\n{results.get('reader', '')}"
-        )
-
-        return writer_chain.invoke({
-            "topic": topic,
-            "research": combined
-        })
-
-    # ✅ STEP 4 — CRITIC (Gemini)
-    elif step_idx == 3:
-        return critic_chain.invoke({
-            "report": results.get("report", "")
-        })
-
+from pipeline import run_research_pipeline
 
 STEP_KEYS  = ["search", "reader", "report", "feedback"]
 STEP_NAMES = ["Search Agent", "Reader Agent", "Writer Agent", "Critic Agent"]
-
 
 # ✅ START PIPELINE WHEN BUTTON CLICKED
 if run_btn and topic_input.strip():
@@ -1016,40 +954,47 @@ if run_btn and topic_input.strip():
     st.session_state.running = True
     st.session_state.current_step = 0
     st.session_state.topic_locked = topic_input.strip()
-    add_log(f"Pipeline started → '{topic_input.strip()}'")
+    st.session_state.results = {}
+    st.session_state.logs = []
+    st.rerun()
+    
+if st.session_state.running:
+    topic_locked = st.session_state.topic_locked
+    
+    try:
+        # Pre-render the first skeleton immediately
+        update_tabs(0, {}, topic_locked)
+        
+        for update in run_research_pipeline(topic_locked):
+            step = update["step"]
+            status = update["status"]
+            state = update["state"]
+            
+            st.session_state.current_step = step
+            st.session_state.results = state
+            
+            if step < len(STEP_NAMES):
+                name = STEP_NAMES[step]
+                add_log(f"[{name}] {status}")
+            else:
+                add_log(status)
+                
+            # Render Live UI Updates into the placeholders!
+            cards_placeholder.markdown(render_agent_cards(step, True, False), unsafe_allow_html=True)
+            render_progress(step, True, False)
+            render_logs(st.session_state.logs)
+            update_tabs(step, state, topic_locked)
+            
+    except Exception as e:
+        st.session_state.error = str(e)
+        add_log(f"Pipeline error: {e}")
+        
+    st.session_state.running = False
+    st.session_state.done = not bool(st.session_state.error)
+    if st.session_state.done:
+        add_log("All agents complete — report ready!")
+    
     st.rerun()
 
-
-# ✅ EXECUTE PIPELINE STEP-BY-STEP
-if st.session_state.running:
-    i = st.session_state.current_step
-    topic_locked = st.session_state.topic_locked
-
-    if 0 <= i < len(STEP_KEYS):
-        key  = STEP_KEYS[i]
-        name = STEP_NAMES[i]
-
-        if key not in st.session_state.results:
-            try:
-                add_log(f"{name} started…")
-
-                result = _run_step(i, topic_locked, st.session_state.results)
-
-                st.session_state.results[key] = result
-                add_log(f"{name} done ✓")
-
-                if i + 1 < len(STEP_KEYS):
-                    st.session_state.current_step = i + 1
-                else:
-                    st.session_state.running = False
-                    st.session_state.done = True
-                    st.session_state.current_step = len(STEP_KEYS)
-                    add_log("All agents complete — report ready!")
-
-                st.rerun()
-
-            except Exception as e:
-                st.session_state.error = str(e)
-                st.session_state.running = False
-                add_log(f"Error in {name}: {e}")
-                st.rerun()
+# Note: We run the entire pipeline synchronously above during the button click to avoid flickering. 
+# The UI will update instantly once the generator completes, taking only a few seconds.
