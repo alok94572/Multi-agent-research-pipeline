@@ -1,55 +1,74 @@
-from tools import web_search, scrape_url
-from agents import writer_chain, critic_chain
-import re
+from agents import build_reader_agent , build_search_agent , writer_chain , critic_chain
 
-def run_research_pipeline(topic: str):
-    """
-    Executes the research pipeline and yields progress updates to allow streaming UI.
-    """
+def run_research_pipeline(topic : str) -> dict:
+
     state = {}
 
-    yield {"step": 0, "status": "Searching the web...", "state": state}
-    try:
-        search_results = web_search.invoke({"query": topic})
-        state["search"] = search_results
-    except Exception as e:
-        state["search"] = f"Search failed: {e}"
+    #search agent working 
+    print("\n"+" ="*50)
+    print("step 1 - search agent is working ...")
+    print("="*50)
 
-    yield {"step": 1, "status": "Reading and scraping content...", "state": state}
-    urls = re.findall(r'https?://[^\s)\]]+', state.get("search", ""))
-    
-    if urls:
-        best_url = urls[0]
-        try:
-            scraped_content = scrape_url.invoke({"url": best_url})
-        except Exception as e:
-            scraped_content = f"Scraping failed: {e}"
-    else:
-        scraped_content = "No valid URL found in search results."
+    search_agent = build_search_agent()
+    search_result = search_agent.invoke({
+        "messages" : [("user", f"Find recent, reliable and detailed information about: {topic}")]
+    })
+    state["search_results"] = search_result['messages'][-1].content
 
-    state["reader"] = scraped_content
+    print("\n search result ",state['search_results'])
 
-    yield {"step": 2, "status": "Writing research report...", "state": state}
-    research_combined = f"SEARCH RESULTS:\n{state.get('search', '')}\n\nSCRAPED CONTENT:\n{state.get('reader', '')}"
-    
-    try:
-        report = writer_chain.invoke({
-            "topic": topic,
-            "research": research_combined
-        })
-    except Exception as e:
-        report = f"Writing failed: {e}"
+    #step 2 - reader agent 
+    print("\n"+" ="*50)
+    print("step 2 - Reader agent is scraping top resources ...")
+    print("="*50)
 
-    state["report"] = report
+    reader_agent = build_reader_agent()
+    reader_result = reader_agent.invoke({
+        "messages": [("user",
+            f"Based on the following search results about '{topic}', "
+            f"pick the most relevant URL and scrape it for deeper content.\n\n"
+            f"Search Results:\n{state['search_results'][:800]}"
+        )]
+    })
 
-    yield {"step": 3, "status": "Critic reviewing report...", "state": state}
-    try:
-        feedback = critic_chain.invoke({
-            "report": report
-        })
-    except Exception as e:
-        feedback = f"Review failed: {e}"
+    state['scraped_content'] = reader_result['messages'][-1].content
 
-    state["feedback"] = feedback
-    
-    yield {"step": 4, "status": "Pipeline complete!", "state": state}
+    print("\nscraped content: \n", state['scraped_content'])
+
+    #step 3 - writer chain 
+
+    print("\n"+" ="*50)
+    print("step 3 - Writer is drafting the report ...")
+    print("="*50)
+
+    research_combined = (
+        f"SEARCH RESULTS : \n {state['search_results']} \n\n"
+        f"DETAILED SCRAPED CONTENT : \n {state['scraped_content']}"
+    )
+
+    state["report"] = writer_chain.invoke({
+        "topic" : topic,
+        "research" : research_combined
+    })
+
+    print("\n Final Report\n",state['report'])
+
+    #critic report 
+
+    print("\n"+" ="*50)
+    print("step 4 - critic is reviewing the report ")
+    print("="*50)
+
+    state["feedback"] = critic_chain.invoke({
+        "report":state['report']
+    })
+
+    print("\n critic report \n", state['feedback'])
+
+    return state
+
+
+
+if __name__ == "__main__":
+    topic = input("\n Enter a research topic : ")
+    run_research_pipeline(topic)
