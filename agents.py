@@ -1,67 +1,91 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+import os
 from dotenv import load_dotenv
 
+from langchain.agents import create_agent
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from tools import web_search, scrape_url
+
+
+# ✅ Load environment variables
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash",
-    temperature=0
+
+# ✅ OpenRouter LLM (Qwen Model)
+llm = ChatOpenAI(
+    model="qwen/qwen-2.5-72b-instruct",  # Change if needed
+    temperature=0,
+    openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+    openai_api_base="https://openrouter.ai/api/v1",
+    default_headers={
+        "HTTP-Referer": "http://localhost:3000",  # Optional but recommended
+        "X-Title": "Research Agent App",
+    },
 )
 
-# Writer
+
+# ✅ 1️⃣ Search Agent
+def build_search_agent():
+    return create_agent(
+        model=llm,
+        tools=[web_search],
+    )
+
+
+# ✅ 2️⃣ Reader Agent
+def build_reader_agent():
+    return create_agent(
+        model=llm,
+        tools=[scrape_url],
+    )
+
+
+# ✅ 3️⃣ Writer Chain
 writer_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are an expert, professional research writer. Your task is to write a comprehensive, well-structured research report in Markdown format."),
-    ("human", """Write a detailed, advanced research report on:
+    ("system", "You are an expert research writer. Write clear, structured and insightful reports."),
+    ("human", """Write a detailed research report on the topic below.
 
 Topic: {topic}
 
-Research Data:
+Research Gathered:
 {research}
 
-Format Requirements:
-Use Markdown format strictly.
-# Introduction
-Write a compelling introduction summarizing the topic.
+Structure the report as:
+- Introduction
+- Key Findings (minimum 3 well-explained points)
+- Conclusion
+- Sources (list all URLs found in the research)
 
-## Key Findings
-Provide at least 3-5 detailed key findings based strictly on the research provided. Use bullet points or numbered lists where appropriate.
-
-## In-Depth Analysis
-Analyze the implications, future outlook, or deeper technical context of the findings.
-
-## Conclusion
-Provide a strong concluding summary.
-
-## Sources
-List the URLs or sources used in the research data.
-""")
+Be detailed, factual and professional."""),
 ])
 
 writer_chain = writer_prompt | llm | StrOutputParser()
 
-# Critic
-critic_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a strict, expert research critic and editor. You critically review research reports for accuracy, depth, and formatting."),
-    ("human", """Review the following research report:
 
+# ✅ 4️⃣ Critic Chain
+critic_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a sharp and constructive research critic. Be honest and specific."),
+    ("human", """Review the research report below and evaluate it strictly.
+
+Report:
 {report}
 
-Provide your feedback strictly in the following Markdown format:
+Respond in this exact format:
 
-# Critic Review
+Score: X/10
 
-**Score:** X/10
+Strengths:
+- ...
+- ...
 
-### 🟢 Strengths:
-- (List 2-3 strong points of the report)
+Areas to Improve:
+- ...
+- ...
 
-### 🔴 Areas to Improve:
-- (List 2-3 specific improvements, missing details, or formatting issues)
-
-### ⚖️ Verdict:
-(One line overall verdict)""")
+One line verdict:
+..."""),
 ])
 
 critic_chain = critic_prompt | llm | StrOutputParser()
